@@ -1,0 +1,1255 @@
+openapi: 3.0.3
+info:
+  title: BlockTrace API
+  description: |
+    Blockchain-based Agricultural Supply Chain Quality Management System.
+    
+    **Auth:** Wallet-signed JWT. Flow: `POST /auth/wallet/nonce` → sign với MetaMask → `POST /auth/wallet/verify` → nhận `accessToken` → gắn vào `Authorization: Bearer <token>`.
+    
+    **Base URL:** `https://api.blocktrace.app/v1`
+    
+    **Roles (RBAC):** `PRODUCER_ROLE` | `DISTRIBUTOR_ROLE` | `RETAILER_ROLE` | `INSPECTOR_ROLE` | `DISPUTE_RESOLVER_ROLE` | `AUDITOR_ROLE` | `DEFAULT_ADMIN_ROLE`
+  version: 1.0.0
+  contact:
+    name: BlockTrace Team
+
+servers:
+  - url: https://api.blocktrace.app/v1
+    description: Production
+  - url: http://localhost:3000/v1
+    description: Local dev
+
+tags:
+  - name: Auth
+    description: Wallet-based authentication
+  - name: Batches
+    description: Product batch lifecycle — Phase 1 to 3
+  - name: Issues
+    description: Quality exception handling — Phase 4 & 5
+  - name: Resolutions
+    description: Dispute resolution — Phase 5
+  - name: Inspections
+    description: Quality inspection (IoT + Human Oracle)
+  - name: Orders
+    description: Commercial order & escrow flow
+  - name: IPFS
+    description: File upload and metadata fetch
+  - name: Events
+    description: Blockchain event timeline
+  - name: IoT
+    description: Sensor data ingestion and query
+  - name: Admin
+    description: Role management and system control
+
+# ─── SECURITY ────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ─── REUSABLE SCHEMAS ──────────────────────────────────────
+  schemas:
+
+    # --- Shared ---
+    Error:
+      type: object
+      properties:
+        code:    { type: string, example: "UNAUTHORIZED" }
+        message: { type: string, example: "Invalid or expired token" }
+
+    PaginationMeta:
+      type: object
+      properties:
+        total:   { type: integer, example: 42 }
+        page:    { type: integer, example: 1 }
+        limit:   { type: integer, example: 20 }
+        hasNext: { type: boolean, example: true }
+
+    # --- Auth ---
+    NonceResponse:
+      type: object
+      properties:
+        nonce:         { type: string, example: "blocktrace-nonce-a3f9..." }
+        walletAddress: { type: string, example: "0xAbC123..." }
+
+    VerifyRequest:
+      type: object
+      required: [walletAddress, signature]
+      properties:
+        walletAddress: { type: string, example: "0xAbC123..." }
+        signature:     { type: string, example: "0x4f3e..." }
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:  { type: string }
+        expiresIn:    { type: integer, example: 86400 }
+        user:         { $ref: '#/components/schemas/UserProfile' }
+
+    UserProfile:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        walletAddress: { type: string }
+        name:          { type: string }
+        role:          { type: string, example: "PRODUCER_ROLE" }
+        organization:  { type: string }
+
+    # --- Batch ---
+    BatchCreateRequest:
+      type: object
+      required: [batchNumber, productName, origin, metadataHash, metadataCid]
+      properties:
+        batchNumber:   { type: string, example: "DUR-001" }
+        productName:   { type: string, example: "Vietnamese Durian Ri6" }
+        origin:        { type: string, example: "Dak Lak" }
+        harvestDate:   { type: string, format: date, example: "2026-05-10" }
+        certification: { type: string, example: "VietGAP" }
+        metadataHash:  { type: string, example: "0xABCD1234..." }
+        metadataCid:   { type: string, example: "ipfs://QmXyz..." }
+
+    Batch:
+      type: object
+      properties:
+        id:             { type: string, format: uuid }
+        tokenId:        { type: integer, example: 42 }
+        batchNumber:    { type: string, example: "DUR-001" }
+        productName:    { type: string, example: "Vietnamese Durian Ri6" }
+        origin:         { type: string, example: "Dak Lak" }
+        harvestDate:    { type: string, format: date }
+        certification:  { type: string }
+        metadataHash:   { type: string }
+        metadataCid:    { type: string }
+        mintTxHash:     { type: string }
+        qrUrl:          { type: string, example: "https://blocktrace.app/verify/42" }
+        producer:       { $ref: '#/components/schemas/UserProfile' }
+        currentOwner:   { $ref: '#/components/schemas/UserProfile' }
+        currentStatus:
+          type: string
+          enum: [CREATED, PACKED, IN_TRANSIT, DELIVERED, UNDER_REVIEW, RECALLED, RESOLVED]
+        isRecalled:     { type: boolean }
+        createdAt:      { type: string, format: date-time }
+        updatedAt:      { type: string, format: date-time }
+
+    BatchVerifyResponse:
+      type: object
+      properties:
+        tokenId:            { type: integer }
+        onchainHash:        { type: string }
+        computedHash:       { type: string }
+        hashMatched:        { type: boolean }
+        verificationResult:
+          type: string
+          enum: [AUTHENTIC, TAMPERED]
+        fetchedMetadataCid: { type: string }
+        verifiedAt:         { type: string, format: date-time }
+
+    StatusUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [PACKED, IN_TRANSIT, DELIVERED, UNDER_REVIEW]
+        notes: { type: string }
+
+    TransferRequest:
+      type: object
+      required: [toWalletAddress]
+      properties:
+        toWalletAddress: { type: string, example: "0xDef456..." }
+        notes:           { type: string }
+
+    # --- Issue ---
+    IssueCreateRequest:
+      type: object
+      required: [batchId, issueType, description, issueHash]
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        issueType:
+          type: string
+          enum: [TEMPERATURE_VIOLATION, PACKAGING_DAMAGE, BATCH_MISMATCH, QUALITY_DEFECT, OTHER]
+        description:  { type: string }
+        issueHash:    { type: string, example: "0xEF123..." }
+        evidenceCid:  { type: string, example: "ipfs://QmEvidence..." }
+
+    Issue:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        batchId:      { type: string, format: uuid }
+        reportedBy:   { $ref: '#/components/schemas/UserProfile' }
+        issueType:    { type: string }
+        description:  { type: string }
+        issueHash:    { type: string }
+        evidenceCid:  { type: string }
+        reportTxHash: { type: string }
+        status:
+          type: string
+          enum: [OPEN, UNDER_REVIEW, RESOLVED, RECALLED, CLOSED]
+        resolution:   { $ref: '#/components/schemas/Resolution' }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }
+
+    # --- Resolution ---
+    ResolutionCreateRequest:
+      type: object
+      required: [resolutionType, settlementHash]
+      properties:
+        resolutionType:
+          type: string
+          enum: [REFUND, REPLACE, DISCOUNT, RECALL, NO_ACTION]
+        notes:          { type: string }
+        settlementHash: { type: string, example: "0xSETTLE..." }
+        settlementCid:  { type: string, example: "ipfs://QmSettle..." }
+
+    Resolution:
+      type: object
+      properties:
+        id:             { type: string, format: uuid }
+        issueId:        { type: string, format: uuid }
+        resolvedBy:     { $ref: '#/components/schemas/UserProfile' }
+        resolutionType: { type: string }
+        notes:          { type: string }
+        settlementHash: { type: string }
+        settlementCid:  { type: string }
+        resolveTxHash:  { type: string }
+        resolvedAt:     { type: string, format: date-time }
+
+    # --- Inspection ---
+    InspectionCreateRequest:
+      type: object
+      required: [batchId, inspectionHash]
+      properties:
+        batchId:        { type: string, format: uuid }
+        iotScore:       { type: number, minimum: 0, maximum: 100, example: 88.5 }
+        humanScore:     { type: number, minimum: 0, maximum: 100, example: 76.0 }
+        inspectionHash: { type: string }
+        reportCid:      { type: string }
+
+    Inspection:
+      type: object
+      properties:
+        id:             { type: string, format: uuid }
+        batchId:        { type: string, format: uuid }
+        inspector:      { $ref: '#/components/schemas/UserProfile' }
+        iotScore:       { type: number }
+        humanScore:     { type: number }
+        finalScore:     { type: number, description: "50% iotScore + 50% humanScore" }
+        qualityFlag:
+          type: string
+          enum: [PASS, FAIL, HOLD]
+        inspectionHash: { type: string }
+        reportCid:      { type: string }
+        inspectedAt:    { type: string, format: date-time }
+
+    # --- Order ---
+    OrderCreateRequest:
+      type: object
+      required: [batchId, sellerId, totalAmount, currency]
+      properties:
+        batchId:      { type: string, format: uuid }
+        sellerId:     { type: string, format: uuid }
+        totalAmount:  { type: number, example: 5000000 }
+        currency:
+          type: string
+          enum: [VND, USDT, USDC]
+          default: VND
+
+    Order:
+      type: object
+      properties:
+        id:                 { type: string, format: uuid }
+        orderChainHash:     { type: string }
+        batchId:            { type: string, format: uuid }
+        buyer:              { $ref: '#/components/schemas/UserProfile' }
+        seller:             { $ref: '#/components/schemas/UserProfile' }
+        totalAmount:        { type: number }
+        currency:           { type: string }
+        escrowId:           { type: string }
+        escrowStatus:
+          type: string
+          enum: [PENDING, HELD, RELEASED, REFUNDED]
+        orderStatus:
+          type: string
+          enum: [PLACED, CONFIRMED, PACKED, IN_TRANSIT, DELIVERED, SETTLED, CANCELLED]
+        proofOfDeliveryCid: { type: string }
+        createdAt:          { type: string, format: date-time }
+
+    # --- IPFS ---
+    UploadResponse:
+      type: object
+      properties:
+        cid:  { type: string, example: "ipfs://QmXyz123..." }
+        size: { type: integer, example: 204800 }
+        url:  { type: string, example: "https://gateway.ipfs.io/ipfs/QmXyz123..." }
+
+    HashResponse:
+      type: object
+      properties:
+        hash: { type: string, example: "0xABCD1234..." }
+
+    # --- Blockchain Event ---
+    BlockchainEvent:
+      type: object
+      properties:
+        tokenId:     { type: integer }
+        batchId:     { type: string, format: uuid }
+        eventName:
+          type: string
+          enum: [BatchMinted, StatusUpdated, OwnershipTransferred, IssueReported, IssueResolved, BatchRecalled]
+        txHash:      { type: string }
+        blockNumber: { type: integer }
+        from:        { type: string }
+        to:          { type: string }
+        payload:     { type: object }
+        indexedAt:   { type: string, format: date-time }
+
+    TimelineEntry:
+      type: object
+      properties:
+        step:        { type: integer, example: 1 }
+        eventName:   { type: string }
+        actor:       { type: string, description: "wallet address" }
+        status:      { type: string }
+        txHash:      { type: string }
+        blockNumber: { type: integer }
+        timestamp:   { type: string, format: date-time }
+
+    # --- IoT ---
+    IotLogRequest:
+      type: object
+      required: [batchId, tokenId, deviceId, sensorType, value, unit, recordedAt]
+      properties:
+        batchId:    { type: string, format: uuid }
+        tokenId:    { type: integer }
+        deviceId:   { type: string }
+        sensorType:
+          type: string
+          enum: [temperature, humidity, gps, shock, light]
+        value:      { type: object, description: "Number hoặc {lat, lng}" }
+        unit:       { type: string, example: "°C" }
+        recordedAt: { type: string, format: date-time }
+
+    IotLog:
+      type: object
+      properties:
+        id:         { type: string }
+        batchId:    { type: string, format: uuid }
+        deviceId:   { type: string }
+        sensorType: { type: string }
+        value:      { type: object }
+        unit:       { type: string }
+        isAnomaly:  { type: boolean }
+        threshold:
+          type: object
+          properties:
+            min: { type: number }
+            max: { type: number }
+        recordedAt: { type: string, format: date-time }
+
+  # ─── REUSABLE RESPONSES ────────────────────────────────────
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Insufficient role permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+# ════════════════════════════════════════════════════════════
+# PATHS
+# ════════════════════════════════════════════════════════════
+paths:
+
+  # ─── AUTH ─────────────────────────────────────────────────
+  /auth/wallet/nonce:
+    post:
+      tags: [Auth]
+      summary: Get nonce for wallet signing
+      description: Bước 1 — lấy nonce để ký bằng MetaMask/wallet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [walletAddress]
+              properties:
+                walletAddress: { type: string, example: "0xAbC123..." }
+      responses:
+        '200':
+          description: Nonce generated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NonceResponse' }
+
+  /auth/wallet/verify:
+    post:
+      tags: [Auth]
+      summary: Verify wallet signature → get JWT
+      description: Bước 2 — gửi signature → nhận accessToken.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyRequest' }
+      responses:
+        '200':
+          description: Auth success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user profile
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout — invalidate JWT
+      security: [{ BearerAuth: [] }]
+      responses:
+        '204': { description: Logged out }
+
+  # ─── BATCHES ──────────────────────────────────────────────
+  /batches:
+    post:
+      tags: [Batches]
+      summary: Create batch (Phase 1)
+      description: |
+        PRODUCER_ROLE only.
+        Flow: upload metadata → hash → call `mintBatch()` on-chain → lưu tokenId + QR.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BatchCreateRequest' }
+      responses:
+        '201':
+          description: Batch created and NFT minted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Batch' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    get:
+      tags: [Batches]
+      summary: List batches
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [CREATED, PACKED, IN_TRANSIT, DELIVERED, UNDER_REVIEW, RECALLED, RESOLVED]
+        - in: query
+          name: producerId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Paginated batch list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Batch' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+  /batches/{tokenId}:
+    get:
+      tags: [Batches]
+      summary: Get batch by tokenId (public — after QR scan)
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Batch detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Batch' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /batches/{tokenId}/verify:
+    get:
+      tags: [Batches]
+      summary: Verify batch integrity (Phase 6)
+      description: |
+        Public endpoint.
+        Flow: fetch metadataCid → tải metadata từ IPFS cache → SHA-256 rehash → so sánh với on-chain metadataHash.
+        Trả về `AUTHENTIC` hoặc `TAMPERED`.
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchVerifyResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /batches/{tokenId}/history:
+    get:
+      tags: [Batches]
+      summary: Full batch history (transfers + events)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: History entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch:     { $ref: '#/components/schemas/Batch' }
+                  timeline:  { type: array, items: { $ref: '#/components/schemas/TimelineEntry' } }
+                  issues:    { type: array, items: { $ref: '#/components/schemas/Issue' } }
+
+  /batches/{tokenId}/status:
+    patch:
+      tags: [Batches]
+      summary: Update shipment status (Phase 3)
+      description: DISTRIBUTOR_ROLE hoặc RETAILER_ROLE. Gọi `updateShipmentStatus()` on-chain.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StatusUpdateRequest' }
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Batch' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /batches/{tokenId}/transfer:
+    post:
+      tags: [Batches]
+      summary: Transfer batch ownership (Phase 3)
+      description: Current owner only. Gọi `transferBatchOwnership()` on-chain → tạo BatchTransfer record.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferRequest' }
+      responses:
+        '200':
+          description: Ownership transferred
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Batch' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /batches/{tokenId}/qr:
+    get:
+      tags: [Batches]
+      summary: Get QR code for batch
+      description: PRODUCER_ROLE only. Trả về QR image (PNG) hoặc URL.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+        - in: query
+          name: format
+          schema: { type: string, enum: [url, png], default: url }
+      responses:
+        '200':
+          description: QR code
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  qrUrl:     { type: string }
+                  imageData: { type: string, description: "Base64 PNG nếu format=png" }
+
+  # ─── ISSUES ───────────────────────────────────────────────
+  /issues:
+    post:
+      tags: [Issues]
+      summary: Report issue (Phase 4)
+      description: |
+        DISTRIBUTOR_ROLE | RETAILER_ROLE | INSPECTOR_ROLE.
+        Flow: upload evidence → hash → gọi `reportIssue()` on-chain → batch chuyển sang UNDER_REVIEW.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueCreateRequest' }
+      responses:
+        '201':
+          description: Issue created and recorded on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Issue' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    get:
+      tags: [Issues]
+      summary: List issues
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: batchId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: status
+          schema: { type: string, enum: [OPEN, UNDER_REVIEW, RESOLVED, RECALLED, CLOSED] }
+        - in: query
+          name: issueType
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Paginated issue list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+  /issues/{issueId}:
+    get:
+      tags: [Issues]
+      summary: Get issue detail
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: issueId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Issue detail with resolution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Issue' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /issues/{issueId}/status:
+    patch:
+      tags: [Issues]
+      summary: Update issue status
+      description: INSPECTOR_ROLE. Chuyển OPEN → UNDER_REVIEW → CLOSED.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: issueId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [UNDER_REVIEW, CLOSED]
+                notes: { type: string }
+      responses:
+        '200':
+          description: Issue status updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Issue' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /issues/{issueId}/evidence:
+    post:
+      tags: [Issues]
+      summary: Add additional evidence to issue
+      description: Upload thêm ảnh/PDF → cập nhật evidenceCid.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: issueId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                notes: { type: string }
+      responses:
+        '200':
+          description: Evidence uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidenceCid: { type: string }
+                  issueHash:   { type: string }
+
+  /issues/{issueId}/resolution:
+    post:
+      tags: [Resolutions]
+      summary: Create resolution (Phase 5)
+      description: |
+        DISPUTE_RESOLVER_ROLE only.
+        Gọi `resolveIssue()` on-chain → lưu settlementHash → đóng issue lifecycle.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: issueId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResolutionCreateRequest' }
+      responses:
+        '201':
+          description: Resolution finalized on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resolution' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ─── INSPECTIONS ──────────────────────────────────────────
+  /inspections:
+    post:
+      tags: [Inspections]
+      summary: Create quality inspection
+      description: INSPECTOR_ROLE. finalScore = 50% iotScore + 50% humanScore.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InspectionCreateRequest' }
+      responses:
+        '201':
+          description: Inspection created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Inspection' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /inspections/batch/{tokenId}:
+    get:
+      tags: [Inspections]
+      summary: List inspections for a batch
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Inspections list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Inspection' }
+
+  /inspections/{inspectionId}:
+    get:
+      tags: [Inspections]
+      summary: Get inspection detail
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: inspectionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Inspection detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Inspection' }
+
+  # ─── ORDERS ───────────────────────────────────────────────
+  /orders:
+    post:
+      tags: [Orders]
+      summary: Create order
+      description: Tạo đơn → sinh orderChainHash → escrow PENDING.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCreateRequest' }
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+
+  /orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get order detail
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Order detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+
+  /orders/{orderId}/status:
+    patch:
+      tags: [Orders]
+      summary: Update order status
+      description: DISTRIBUTOR_ROLE | RETAILER_ROLE.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [CONFIRMED, PACKED, IN_TRANSIT, DELIVERED]
+      responses:
+        '200':
+          description: Order status updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+
+  /orders/{orderId}/delivery-confirm:
+    post:
+      tags: [Orders]
+      summary: Confirm delivery + upload Proof of Delivery
+      description: DISTRIBUTOR_ROLE. Upload PoD → trigger fund release check.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:  { type: string, format: binary, description: "PoD image / signature" }
+                notes: { type: string }
+      responses:
+        '200':
+          description: Delivery confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+
+  /orders/{orderId}/release-fund:
+    post:
+      tags: [Orders]
+      summary: Release escrow fund to seller
+      description: DEFAULT_ADMIN_ROLE / ERP trigger. Sau khi đủ điều kiện (PoD xác nhận, không có dispute).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Fund released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:      { type: string }
+                  escrowStatus: { type: string, example: "RELEASED" }
+                  releasedAt:   { type: string, format: date-time }
+
+  # ─── IPFS ─────────────────────────────────────────────────
+  /upload/ipfs:
+    post:
+      tags: [IPFS]
+      summary: Upload file to IPFS
+      description: Hỗ trợ ảnh, PDF, JSON. Trả về CID.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Upload success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+
+  /upload/ipfs/{cid}:
+    get:
+      tags: [IPFS]
+      summary: Fetch metadata from IPFS cache
+      description: Đọc từ MongoDB cache trước, fetch IPFS nếu cache miss.
+      parameters:
+        - in: path
+          name: cid
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Metadata JSON
+          content:
+            application/json:
+              schema: { type: object }
+
+  /upload/metadata/hash:
+    post:
+      tags: [IPFS]
+      summary: Compute SHA-256 hash of metadata JSON
+      description: Dùng trước khi mint — để lấy metadataHash cho mintBatch().
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: "Raw metadata JSON object" }
+      responses:
+        '200':
+          description: Hash computed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HashResponse' }
+
+  # ─── EVENTS ───────────────────────────────────────────────
+  /events/{tokenId}:
+    get:
+      tags: [Events]
+      summary: Get all blockchain events for a batch
+      description: Đọc từ MongoDB (indexed từ chain). Sort theo blockNumber asc.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+        - in: query
+          name: eventName
+          schema:
+            type: string
+            enum: [BatchMinted, StatusUpdated, OwnershipTransferred, IssueReported, IssueResolved, BatchRecalled]
+      responses:
+        '200':
+          description: Events list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BlockchainEvent' }
+
+  /events/{tokenId}/timeline:
+    get:
+      tags: [Events]
+      summary: Get UI-ready timeline for a batch
+      description: Tái dựng timeline dạng step-by-step. Public.
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Timeline entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TimelineEntry' }
+
+  # ─── IOT ──────────────────────────────────────────────────
+  /iot/logs:
+    post:
+      tags: [IoT]
+      summary: Ingest IoT sensor log
+      description: IoT device dùng API Key (header X-Device-Key). Không cần JWT.
+      security: []
+      parameters:
+        - in: header
+          name: X-Device-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IotLogRequest' }
+      responses:
+        '201':
+          description: Log ingested
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IotLog' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /iot/logs/{batchId}:
+    get:
+      tags: [IoT]
+      summary: Get IoT logs for a batch
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: sensorType
+          schema: { type: string, enum: [temperature, humidity, gps, shock, light] }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: IoT log list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/IotLog' }
+
+  /iot/logs/{batchId}/anomalies:
+    get:
+      tags: [IoT]
+      summary: Get anomaly logs only
+      description: INSPECTOR_ROLE. Chỉ trả isAnomaly=true — dùng để highlight dashboard.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Anomaly logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/IotLog' }
+
+  # ─── ADMIN ────────────────────────────────────────────────
+  /admin/roles/grant:
+    post:
+      tags: [Admin]
+      summary: Grant role to user
+      description: DEFAULT_ADMIN_ROLE only. Emit RoleGranted event on-chain.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, roleName]
+              properties:
+                userId:   { type: string, format: uuid }
+                roleName:
+                  type: string
+                  enum: [PRODUCER_ROLE, DISTRIBUTOR_ROLE, RETAILER_ROLE, INSPECTOR_ROLE, DISPUTE_RESOLVER_ROLE, AUDITOR_ROLE]
+      responses:
+        '200':
+          description: Role granted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/roles/revoke:
+    post:
+      tags: [Admin]
+      summary: Revoke role from user
+      description: DEFAULT_ADMIN_ROLE only.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, roleName]
+              properties:
+                userId:   { type: string, format: uuid }
+                roleName: { type: string }
+      responses:
+        '200':
+          description: Role revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/audit-trail:
+    get:
+      tags: [Admin]
+      summary: Query audit trail
+      description: DEFAULT_ADMIN_ROLE | AUDITOR_ROLE.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: actorId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: action
+          schema: { type: string }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Audit trail entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+  /admin/pause:
+    post:
+      tags: [Admin]
+      summary: Pause smart contract (emergency stop)
+      description: DEFAULT_ADMIN_ROLE only — multisig required.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Contract paused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paused: { type: boolean, example: true }
+                  txHash: { type: string }
+
+  /admin/unpause:
+    post:
+      tags: [Admin]
+      summary: Unpause smart contract
+      description: DEFAULT_ADMIN_ROLE only.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Contract unpaused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paused: { type: boolean, example: false }
+                  txHash: { type: string }

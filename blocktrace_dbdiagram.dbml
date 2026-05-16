@@ -1,0 +1,251 @@
+// ============================================================
+// BlockTrace — PostgreSQL ERD Schema (dbdiagram.io)
+// Dựa theo flowchart: Producer → Distributor → Consumer
+// Paste toàn bộ file này vào https://dbdiagram.io
+// ============================================================
+
+// ─── 1. ROLES ────────────────────────────────────────────────
+Table roles {
+  id              uuid        [pk, note: "Primary key"]
+  name            varchar(100) [unique, not null, note: "PRODUCER_ROLE | DISTRIBUTOR_ROLE | RETAILER_ROLE | INSPECTOR_ROLE | DISPUTE_RESOLVER_ROLE | AUDITOR_ROLE | DEFAULT_ADMIN_ROLE"]
+  description     text
+  on_chain_role_hash varchar(66) [note: "keccak256 bytes32 hash từ smart contract"]
+  created_at      timestamptz [default: `now()`]
+}
+
+// ─── 2. USERS ────────────────────────────────────────────────
+Table users {
+  id              uuid        [pk]
+  wallet_address  varchar(42) [unique, not null, note: "Ethereum wallet — liên kết on-chain actor"]
+  email           varchar(255) [unique, note: "Nullable nếu dùng wallet-only login"]
+  name            varchar(255) [not null]
+  role_id         uuid        [not null, ref: > roles.id, note: "FK → roles"]
+  organization    varchar(255)
+  is_active       boolean     [default: true]
+  created_at      timestamptz [default: `now()`]
+  updated_at      timestamptz [default: `now()`]
+}
+
+// ─── 3. BATCHES ──────────────────────────────────────────────
+// Tương ứng Phase 1 flowchart:
+//   Producer Creates Metadata → Upload → Hash → Mint ERC721 → Store On-chain → Generate QR
+Table batches {
+  id              uuid        [pk]
+  token_id        bigint      [unique, not null, note: "tokenId on-chain — ERC721 NFT identifier"]
+  batch_number    varchar(100) [not null, note: "VD: DUR-001"]
+  product_name    varchar(255) [not null]
+  origin          varchar(255) [not null, note: "Tỉnh / vùng xuất xứ"]
+  harvest_date    date
+  certification   varchar(100) [note: "VietGAP | GlobalGAP | Organic"]
+
+  // Phase 1 — Step 2,3: Upload metadata + Generate Hash
+  metadata_hash   varchar(66)  [not null, note: "SHA-256(metadata JSON) — khớp on-chain metadataHash"]
+  metadata_cid    varchar(255) [not null, note: "IPFS CID — ipfs://Qm123..."]
+
+  // Phase 1 — Step 4: Mint NFT
+  mint_tx_hash    varchar(66)  [note: "Tx hash của mintBatch() call"]
+
+  // Phase 2: Generate QR
+  qr_url          text         [note: "https://blocktrace.app/verify/{token_id}"]
+
+  // Ownership tracking (Phase 3: Distributor nhận hàng)
+  producer_id     uuid         [not null, ref: > users.id]
+  current_owner_id uuid        [not null, ref: > users.id]
+
+  // Status — cập nhật theo từng phase
+  current_status  varchar(50)  [not null, note: "CREATED | PACKED | IN_TRANSIT | DELIVERED | UNDER_REVIEW | RECALLED | RESOLVED"]
+  is_recalled     boolean      [default: false]
+
+  created_at      timestamptz  [default: `now()`]
+  updated_at      timestamptz  [default: `now()`]
+
+  indexes {
+    token_id       [unique]
+    current_status
+    producer_id
+  }
+}
+
+// ─── 4. BATCH TRANSFERS ──────────────────────────────────────
+// Phase 3 flowchart:
+//   Distributor Scans QR → Verify Token → Update Shipment Status → Transfer Ownership
+// Append-only — không update, không delete
+Table batch_transfers {
+  id                  uuid        [pk]
+  batch_id            uuid        [not null, ref: > batches.id]
+
+  from_user_id        uuid        [ref: > users.id, note: "Null nếu là mint ban đầu (producer → system)"]
+  to_user_id          uuid        [not null, ref: > users.id]
+
+  // Phase 3 — Step 6: Verify Token Authenticity
+  verified_on_scan    boolean     [default: false, note: "true nếu đã verify token trước khi nhận"]
+
+  // Phase 3 — Step 7: Update Shipment Status
+  status_at_transfer  varchar(50) [not null, note: "Trạng thái lúc bàn giao: IN_TRANSIT | DELIVERED..."]
+  tx_hash             varchar(66) [note: "Tx hash của updateShipmentStatus() hoặc transferBatchOwnership()"]
+
+  transferred_at      timestamptz [default: `now()`]
+  notes               text
+
+  indexes {
+    batch_id
+    (batch_id, transferred_at)
+  }
+}
+
+// ─── 5. ISSUES ───────────────────────────────────────────────
+// Phase 4 flowchart:
+//   Issue Detected? → Create Issue Report → Upload Evidence Off-chain
+//                  → Generate Issue Hash → Record Issue On-chain
+Table issues {
+  id              uuid        [pk]
+  batch_id        uuid        [not null, ref: > batches.id]
+  reported_by_id  uuid        [not null, ref: > users.id, note: "DISTRIBUTOR | RETAILER | INSPECTOR"]
+
+  // Phase 4 — Step 8: Issue type
+  issue_type      varchar(100) [not null, note: "TEMPERATURE_VIOLATION | PACKAGING_DAMAGE | BATCH_MISMATCH | QUALITY_DEFECT | OTHER"]
+  description     text         [not null]
+
+  // Phase 4 — Step 9: Upload Evidence Off-chain
+  evidence_cid    varchar(255) [note: "IPFS CID — ảnh, PDF bằng chứng"]
+
+  // Phase 4 — Step 9→10: Generate Issue Hash + Record On-chain
+  issue_hash      varchar(66)  [not null, note: "SHA-256(evidence) — neo on-chain qua reportIssue()"]
+  report_tx_hash  varchar(66)  [note: "Tx hash của reportIssue() call"]
+
+  status          varchar(50)  [not null, default: 'OPEN', note: "OPEN | UNDER_REVIEW | RESOLVED | RECALLED | CLOSED"]
+
+  created_at      timestamptz  [default: `now()`]
+  updated_at      timestamptz  [default: `now()`]
+
+  indexes {
+    batch_id
+    status
+    reported_by_id
+  }
+}
+
+// ─── 6. RESOLUTIONS ──────────────────────────────────────────
+// Phase 5 flowchart:
+//   Resolution Proposal → Confirm Resolution
+// Chỉ DISPUTE_RESOLVER_ROLE được ghi — 1:1 với issue
+Table resolutions {
+  id              uuid        [pk]
+  issue_id        uuid        [unique, not null, ref: - issues.id, note: "1:1 — 1 issue chỉ có 1 resolution finalized"]
+  resolved_by_id  uuid        [not null, ref: > users.id, note: "DISPUTE_RESOLVER_ROLE"]
+
+  // Phase 5 — Step 11: Resolution Proposal
+  resolution_type varchar(50) [not null, note: "REFUND | REPLACE | DISCOUNT | RECALL | NO_ACTION"]
+  notes           text
+
+  // Phase 5 — Step 12: Confirm Resolution → on-chain
+  settlement_hash varchar(66) [not null, note: "Hash của settlement document"]
+  settlement_cid  varchar(255) [note: "IPFS CID — biên bản xử lý đầy đủ"]
+  resolve_tx_hash varchar(66) [note: "Tx hash của resolveIssue() call"]
+
+  resolved_at     timestamptz [default: `now()`]
+}
+
+// ─── 7. CONSUMER VERIFICATIONS ───────────────────────────────
+// Phase 6 flowchart:
+//   Consumer Scans QR → Fetch On-chain Data → Fetch Metadata from IPFS
+//   → Recalculate Hash → Hash Match? → Verified / Tampered
+Table consumer_verifications {
+  id                  uuid        [pk]
+  token_id            bigint      [not null, note: "tokenId từ QR scan"]
+  batch_id            uuid        [ref: > batches.id]
+
+  // Phase 6 — Step 14,15: Fetch on-chain + IPFS
+  fetched_metadata_cid varchar(255) [note: "CID dùng để fetch metadata"]
+  onchain_hash        varchar(66)  [note: "metadataHash đọc từ on-chain"]
+
+  // Phase 6 — Step 16: Recalculate + Compare
+  computed_hash       varchar(66)  [note: "SHA-256 recomputed từ fetched metadata"]
+  hash_matched        boolean      [not null, note: "true = AUTHENTIC | false = DATA TAMPERED"]
+
+  // Kết quả xác thực
+  verification_result varchar(20)  [not null, note: "AUTHENTIC | TAMPERED"]
+
+  scanned_at          timestamptz  [default: `now()`]
+  scanner_ip          varchar(45)  [note: "IPv4/IPv6 — for analytics"]
+
+  indexes {
+    token_id
+    (token_id, scanned_at)
+    hash_matched
+  }
+}
+
+// ─── 8. ORDERS ───────────────────────────────────────────────
+// Business layer: đặt hàng → escrow → giao hàng → giải ngân
+Table orders {
+  id                    uuid        [pk]
+  order_chain_hash      varchar(66) [unique, not null, note: "Hash đơn hàng — liên kết on-chain"]
+  batch_id              uuid        [not null, ref: > batches.id]
+  buyer_id              uuid        [not null, ref: > users.id]
+  seller_id             uuid        [not null, ref: > users.id]
+
+  total_amount          decimal(18,6) [not null]
+  currency              varchar(10)   [default: 'VND', note: "VND | USDT | USDC"]
+
+  escrow_id             varchar(255)
+  escrow_status         varchar(50)   [default: 'PENDING', note: "PENDING | HELD | RELEASED | REFUNDED"]
+  order_status          varchar(50)   [default: 'PLACED', note: "PLACED | CONFIRMED | PACKED | IN_TRANSIT | DELIVERED | SETTLED | CANCELLED"]
+
+  proof_of_delivery_cid varchar(255)  [note: "IPFS CID — ảnh, chữ ký, GPS"]
+  delivered_at          timestamptz
+  settled_at            timestamptz
+
+  created_at            timestamptz  [default: `now()`]
+  updated_at            timestamptz  [default: `now()`]
+
+  indexes {
+    batch_id
+    buyer_id
+    seller_id
+    order_status
+  }
+}
+
+// ─── 9. QUALITY INSPECTIONS ──────────────────────────────────
+// Weighted Scoring: 50% IoT + 50% Human Oracle
+Table quality_inspections {
+  id              uuid        [pk]
+  batch_id        uuid        [not null, ref: > batches.id]
+  inspector_id    uuid        [not null, ref: > users.id, note: "INSPECTOR_ROLE"]
+
+  iot_score       decimal(5,2) [note: "0-100 từ IoT sensors (nhiệt độ, độ ẩm, GPS)"]
+  human_score     decimal(5,2) [note: "0-100 từ Human Oracle (màu, cảm quan, kích thước)"]
+  final_score     decimal(5,2) [note: "50% IoT + 50% Human"]
+  quality_flag    varchar(20)  [note: "PASS | FAIL | HOLD"]
+
+  inspection_hash varchar(66)  [not null, note: "Hash biên bản — neo on-chain"]
+  report_cid      varchar(255) [note: "IPFS CID — PDF báo cáo đầy đủ"]
+
+  inspected_at    timestamptz  [default: `now()`]
+
+  indexes {
+    batch_id
+    quality_flag
+    inspector_id
+  }
+}
+
+// ============================================================
+// RELATIONSHIPS SUMMARY
+// ============================================================
+// roles              1 ── N  users
+// users (producer)   1 ── N  batches
+// users (owner)      1 ── N  batches
+// batches            1 ── N  batch_transfers
+// batches            1 ── N  issues
+// issues             1 ── 1  resolutions
+// batches            1 ── N  orders
+// batches            1 ── N  quality_inspections
+// batches            1 ── N  consumer_verifications
+// users              1 ── N  batch_transfers (from)
+// users              1 ── N  batch_transfers (to)
+// users              1 ── N  issues (reporter)
+// users              1 ── N  resolutions (resolver)
+// users              1 ── N  quality_inspections (inspector)
+// ============================================================
