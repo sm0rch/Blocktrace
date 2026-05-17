@@ -7,7 +7,17 @@ dotenv.config();
 
 export default defineConfig({
   plugins: [hardhatToolboxViem, hardhatIgnitionViem],
-  solidity: "0.8.28",
+  // Thay thế chuỗi version bằng object cấu hình chi tiết để fix lỗi Stack too deep
+  solidity: {
+    version: "0.8.28",
+    settings: {
+      viaIR: true,
+      optimizer: {
+        enabled: true,
+        runs: 200,
+      },
+    },
+  },
   networks: {
     sepolia: {
       type: "http",
