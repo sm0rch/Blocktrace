@@ -2,27 +2,26 @@
 pragma solidity ^0.8.28;
 
 import {Counter} from "../contracts/Counter.sol";
-import {Test}    from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 contract CounterTest is Test {
-
     Counter bt;
 
-    address admin       = makeAddr("admin");
-    address producer    = makeAddr("producer");
+    address admin = makeAddr("admin");
+    address producer = makeAddr("producer");
     address distributor = makeAddr("distributor");
-    address retailer    = makeAddr("retailer");
-    address inspector   = makeAddr("inspector");
-    address resolver    = makeAddr("resolver");
-    address stranger    = makeAddr("stranger");
+    address retailer = makeAddr("retailer");
+    address inspector = makeAddr("inspector");
+    address resolver = makeAddr("resolver");
+    address stranger = makeAddr("stranger");
 
-    bytes32 constant META_HASH       = keccak256("metadata-ipfs-cid");
-    bytes32 constant UPDATE_HASH     = keccak256("custody-update-data");
-    bytes32 constant ISSUE_HASH      = keccak256("issue-description-data");
-    bytes32 constant EVIDENCE_HASH   = keccak256("evidence-photos-data");
+    bytes32 constant META_HASH = keccak256("metadata-ipfs-cid");
+    bytes32 constant UPDATE_HASH = keccak256("custody-update-data");
+    bytes32 constant ISSUE_HASH = keccak256("issue-description-data");
+    bytes32 constant EVIDENCE_HASH = keccak256("evidence-photos-data");
     bytes32 constant SETTLEMENT_HASH = keccak256("settlement-plan-data");
 
-    string constant META_CID   = "QmExampleCID123456789";
+    string constant META_CID = "QmExampleCID123456789";
     string constant ISSUE_TYPE = "TEMPERATURE_VIOLATION";
 
     // ─────────────────────────────────────────────
@@ -34,11 +33,11 @@ contract CounterTest is Test {
         bt = new Counter(admin);
 
         vm.startPrank(admin);
-        bt.grantRole(bt.PRODUCER_ROLE(),    producer);
+        bt.grantRole(bt.PRODUCER_ROLE(), producer);
         bt.grantRole(bt.DISTRIBUTOR_ROLE(), distributor);
-        bt.grantRole(bt.RETAILER_ROLE(),    retailer);
-        bt.grantRole(bt.INSPECTOR_ROLE(),   inspector);
-        bt.grantRole(bt.RESOLVER_ROLE(),    resolver);
+        bt.grantRole(bt.RETAILER_ROLE(), retailer);
+        bt.grantRole(bt.INSPECTOR_ROLE(), inspector);
+        bt.grantRole(bt.RESOLVER_ROLE(), resolver);
         vm.stopPrank();
     }
 
@@ -185,7 +184,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(retailer);
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
-        (,,,,,,Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
         assertEq(evHash, EVIDENCE_HASH);
         assertEq(uint8(status), uint8(Counter.IssueStatus.UnderReview));
     }
@@ -194,7 +193,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(distributor);
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
-        (,,,,,,Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
         assertEq(evHash, EVIDENCE_HASH);
         assertEq(uint8(status), uint8(Counter.IssueStatus.UnderReview));
     }
@@ -350,8 +349,7 @@ contract CounterTest is Test {
         uint256[] memory log = bt.getCustodyLog(batchId);
         assertEq(log.length, 1);
 
-        (uint256 bid, address actor, bytes32 updHash, uint256 ts, string memory note)
-            = bt.custodyUpdates(log[0]);
+        (uint256 bid, address actor, bytes32 updHash, uint256 ts, string memory note) = bt.custodyUpdates(log[0]);
 
         assertEq(bid, batchId);
         assertEq(actor, distributor);
@@ -518,11 +516,7 @@ contract CounterTest is Test {
         uint256 batchId = _createBatch();
         vm.expectEmit(true, false, false, true);
         emit Counter.BatchStatusChanged(
-            batchId,
-            Counter.BatchStatus.Minted,
-            Counter.BatchStatus.UnderReview,
-            inspector,
-            block.timestamp
+            batchId, Counter.BatchStatus.Minted, Counter.BatchStatus.UnderReview, inspector, block.timestamp
         );
         vm.prank(inspector);
         bt.reportIssue(batchId, ISSUE_HASH, ISSUE_TYPE);
@@ -555,7 +549,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(inspector);
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
-        (,,,,,,Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
         assertEq(evHash, EVIDENCE_HASH);
         assertEq(uint8(status), uint8(Counter.IssueStatus.UnderReview));
     }
@@ -687,8 +681,12 @@ contract CounterTest is Test {
         vm.prank(resolver);
         bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
         (
-            ,,,,,, Counter.IssueStatus iStatus,, bytes32 setHash,
-            Counter.ResolutionType resType, address resolvedBy, uint256 resolvedAt,
+            ,,,,,,
+            Counter.IssueStatus iStatus,,
+            bytes32 setHash,
+            Counter.ResolutionType resType,
+            address resolvedBy,
+            uint256 resolvedAt,
         ) = bt.issues(issueId);
         assertEq(uint8(iStatus), uint8(Counter.IssueStatus.Resolved));
         assertEq(setHash, SETTLEMENT_HASH);
@@ -861,11 +859,7 @@ contract CounterTest is Test {
         _anchorAndConfirm(issueId);
         vm.expectEmit(true, false, false, true);
         emit Counter.BatchStatusChanged(
-            batchId,
-            Counter.BatchStatus.UnderReview,
-            Counter.BatchStatus.Cleared,
-            resolver,
-            block.timestamp
+            batchId, Counter.BatchStatus.UnderReview, Counter.BatchStatus.Cleared, resolver, block.timestamp
         );
         vm.prank(resolver);
         bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
