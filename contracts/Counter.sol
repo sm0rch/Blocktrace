@@ -81,6 +81,14 @@ contract Counter is AccessControl, Pausable {
         Recalled       // thu hồi toàn bộ lô
     }
 
+    enum EscrowStatus {
+        None,
+        Locked,
+        Released,
+        Refunded,
+        PartiallyRefunded
+    }
+
     // ─────────────────────────────────────────────
     //  Structs
     // ─────────────────────────────────────────────
@@ -116,9 +124,22 @@ contract Counter is AccessControl, Pausable {
         bytes32        evidenceHash;         // hash chứng cứ off-chain (ảnh, biên bản...)
         bytes32        settlementHash;       // hash phương án xử lý off-chain
         ResolutionType resolutionType;       // Refund / Replaced / Recalled...
+        uint256        refundAmount;         // số tiền hoàn trả nếu resolution là Refund/RefundPartial
         address        resolvedBy;
         uint256        resolvedAt;
         bool           stakeholderConfirmed; // [ADD-3] xác nhận từ bên liên quan
+    }
+
+    struct Escrow {
+        uint256      batchId;
+        address      payer;       // bên mua/người khóa tiền
+        address      payee;       // bên nhận tiền khi đủ điều kiện
+        uint256      amount;      // tổng số tiền đang khóa
+        uint256      flatFee;     // phí cố định, chuyển về treasury khi release
+        uint256      lockedAt;
+        uint256      settledAt;
+        EscrowStatus status;
+        bool         exists;
     }
 
     // ─────────────────────────────────────────────
@@ -129,9 +150,12 @@ contract Counter is AccessControl, Pausable {
     uint256 private _nextIssueId;
     uint256 private _nextCustodyId;
 
+    address public treasury;
+
     mapping(uint256 => Batch)         public batches;
     mapping(uint256 => Issue)         public issues;
     mapping(uint256 => CustodyUpdate) public custodyUpdates;
+    mapping(uint256 => Escrow)        public escrows;
 
     mapping(uint256 => uint256[]) public batchIssues;      // batchId → issueIds
     mapping(uint256 => uint256[]) public batchCustodyLog;  // batchId → custodyUpdateIds
@@ -199,8 +223,33 @@ contract Counter is AccessControl, Pausable {
         IssueStatus     finalStatus,
         ResolutionType  resolutionType,
         bytes32         settlementHash,
+        uint256         refundAmount,
         address indexed resolvedBy,
         uint256         resolvedAt
+    );
+
+    // --- Payment / Escrow ---
+    event PaymentLocked(
+        uint256 indexed batchId,
+        address indexed payer,
+        address indexed payee,
+        uint256         amount,
+        uint256         flatFee,
+        uint256         timestamp
+    );
+    event PaymentReleased(
+        uint256 indexed batchId,
+        address indexed payee,
+        uint256         amount,
+        uint256         flatFee,
+        uint256         timestamp
+    );
+    event PaymentRefunded(
+        uint256 indexed batchId,
+        address indexed payer,
+        uint256         refundAmount,
+        ResolutionType  resolutionType,
+        uint256         timestamp
     );
 
     // --- Admin --- [ADD-1]
@@ -213,6 +262,7 @@ contract Counter is AccessControl, Pausable {
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        treasury = admin;
     }
 
     // ─────────────────────────────────────────────
@@ -268,6 +318,78 @@ contract Counter is AccessControl, Pausable {
         });
 
         emit BatchCreated(batchId, metadataHash, metadataCID, msg.sender, block.timestamp);
+    }
+
+    // ─────────────────────────────────────────────
+    //  PLAN/EXECUTE: Escrow payment
+    // ─────────────────────────────────────────────
+
+    /**
+     * @notice Khóa tiền ký quỹ cho một batch.
+     * @param batchId ID batch được thanh toán.
+     * @param payee   Ví nhận tiền khi batch đủ điều kiện giải ngân.
+     * @param flatFee Phí cố định giữ lại cho treasury khi release.
+     */
+    function lockPayment(uint256 batchId, address payee, uint256 flatFee)
+        external
+        payable
+        whenNotPaused
+        returns (uint256 lockedAmount)
+    {
+        require(batches[batchId].exists, "lockPayment: batch not found");
+        require(!escrows[batchId].exists, "lockPayment: escrow already exists");
+        require(payee != address(0), "lockPayment: invalid payee");
+        require(msg.value > 0, "lockPayment: payment required");
+        require(flatFee <= msg.value, "lockPayment: flatFee exceeds payment");
+
+        escrows[batchId] = Escrow({
+            batchId: batchId,
+            payer: msg.sender,
+            payee: payee,
+            amount: msg.value,
+            flatFee: flatFee,
+            lockedAt: block.timestamp,
+            settledAt: 0,
+            status: EscrowStatus.Locked,
+            exists: true
+        });
+
+        emit PaymentLocked(batchId, msg.sender, payee, msg.value, flatFee, block.timestamp);
+        return msg.value;
+    }
+
+    /**
+     * @notice Giải ngân escrow khi batch đã Delivered hoặc Cleared.
+     * @dev Payee nhận amount - flatFee; treasury nhận flatFee.
+     */
+    function releasePayment(uint256 batchId) external whenNotPaused {
+        Escrow storage escrow = escrows[batchId];
+        require(escrow.exists, "releasePayment: escrow not found");
+        require(escrow.status == EscrowStatus.Locked, "releasePayment: escrow not locked");
+
+        Batch storage batch = batches[batchId];
+        require(
+            batch.status == BatchStatus.Delivered || batch.status == BatchStatus.Cleared,
+            "releasePayment: payment trigger not met"
+        );
+        require(
+            msg.sender == escrow.payer || msg.sender == escrow.payee || hasRole(RESOLVER_ROLE, msg.sender)
+                || hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+            "releasePayment: caller not authorized"
+        );
+
+        escrow.status = EscrowStatus.Released;
+        escrow.settledAt = block.timestamp;
+
+        uint256 fee = escrow.flatFee;
+        uint256 payeeAmount = escrow.amount - fee;
+
+        if (fee > 0) {
+            _sendValue(treasury, fee);
+        }
+        _sendValue(escrow.payee, payeeAmount);
+
+        emit PaymentReleased(batchId, escrow.payee, payeeAmount, fee, block.timestamp);
     }
 
     // ─────────────────────────────────────────────
@@ -431,6 +553,7 @@ contract Counter is AccessControl, Pausable {
             evidenceHash:         bytes32(0),
             settlementHash:       bytes32(0),
             resolutionType:       ResolutionType.None,
+            refundAmount:         0,
             resolvedBy:           address(0),
             resolvedAt:           0,
             stakeholderConfirmed: false
@@ -549,6 +672,7 @@ contract Counter is AccessControl, Pausable {
      * @param issueId        ID issue cần chốt.
      * @param settlementHash Hash phương án xử lý off-chain (biên bản thỏa thuận...).
      * @param resolution     Cleared / Refund / RefundPartial / Replaced / Recalled.
+     * @param refundAmount   Số tiền hoàn trả nếu resolution là Refund hoặc RefundPartial.
      *
      * @dev Chỉ RESOLVER_ROLE.
      *
@@ -562,13 +686,19 @@ contract Counter is AccessControl, Pausable {
     function resolveIssue(
         uint256        issueId,
         bytes32        settlementHash,
-        ResolutionType resolution
+        ResolutionType resolution,
+        uint256        refundAmount
     )
         external
         onlyRole(RESOLVER_ROLE)
         whenNotPaused
     {
         require(resolution != ResolutionType.None, "resolveIssue: resolution required");
+        if (resolution == ResolutionType.Refund || resolution == ResolutionType.RefundPartial) {
+            require(refundAmount > 0, "resolveIssue: refundAmount required");
+        } else {
+            require(refundAmount == 0, "resolveIssue: refundAmount only for refund");
+        }
 
         Issue storage issue = issues[issueId];
 
@@ -605,6 +735,7 @@ contract Counter is AccessControl, Pausable {
         issue.status         = finalIssueStatus;
         issue.settlementHash = settlementHash;
         issue.resolutionType = resolution;
+        issue.refundAmount   = refundAmount;
         issue.resolvedBy     = msg.sender;
         issue.resolvedAt     = block.timestamp;
 
@@ -626,9 +757,12 @@ contract Counter is AccessControl, Pausable {
             finalIssueStatus,
             resolution,
             settlementHash,
+            refundAmount,
             msg.sender,
             block.timestamp
         );
+
+        _applyRefund(issue.batchId, refundAmount, resolution);
     }
 
     // ─────────────────────────────────────────────
@@ -639,6 +773,36 @@ contract Counter is AccessControl, Pausable {
         BatchStatus old = batches[batchId].status;
         batches[batchId].status = newStatus;
         emit BatchStatusChanged(batchId, old, newStatus, msg.sender, block.timestamp);
+    }
+
+    function _applyRefund(uint256 batchId, uint256 refundAmount, ResolutionType resolution) internal {
+        if (refundAmount == 0) {
+            return;
+        }
+
+        Escrow storage escrow = escrows[batchId];
+        if (!escrow.exists) {
+            return;
+        }
+
+        require(escrow.status == EscrowStatus.Locked, "resolveIssue: escrow not locked");
+        require(refundAmount <= escrow.amount, "resolveIssue: refund exceeds escrow");
+
+        uint256 payeeAmount = escrow.amount - refundAmount;
+        escrow.status = refundAmount == escrow.amount ? EscrowStatus.Refunded : EscrowStatus.PartiallyRefunded;
+        escrow.settledAt = block.timestamp;
+
+        _sendValue(escrow.payer, refundAmount);
+        if (payeeAmount > 0) {
+            _sendValue(escrow.payee, payeeAmount);
+        }
+
+        emit PaymentRefunded(batchId, escrow.payer, refundAmount, resolution, block.timestamp);
+    }
+
+    function _sendValue(address to, uint256 amount) internal {
+        (bool ok,) = payable(to).call{value: amount}("");
+        require(ok, "payment: transfer failed");
     }
 
     // ─────────────────────────────────────────────

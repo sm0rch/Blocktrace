@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,9 +6,219 @@ datasource db {
   provider = "sqlserver"
 }
 
-model User {
-  id            Int      @id @default(autoincrement())
-  walletAddress String   @unique
-  username      String?
-  createdAt     DateTime @default(now())
+model Producer {
+  producerId        String   @id @map("producer_id")
+  email             String   @unique
+  phoneNumber       String   @unique @map("phone_number")
+  originLocation    String?  @map("origin_location")
+  fullName          String?  @map("full_name")
+  companyName       String   @unique @map("company_name")
+  businessLicense   String   @unique @map("business_license")
+  taxCode           String   @unique @map("tax_code")
+  certificationList String?  @map("certification_list")
+  reputationScore   Float    @default(0) @map("reputation_score")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  batches BatchNft[]
+
+  @@map("PRODUCER")
+}
+
+model Carrier {
+  carrierId       String   @id @map("carrier_id")
+  email           String   @unique
+  phoneNumber     String   @unique @map("phone_number")
+  companyName     String   @unique @map("company_name")
+  businessLicense String   @unique @map("business_license")
+  taxCode         String   @unique @map("tax_code")
+  vehicleList     String?  @map("vehicle_list")
+  coldChainCert   String?  @map("cold_chain_cert")
+  reputationScore Float    @default(0) @map("reputation_score")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  transactions BusinessTransaction[]
+
+  @@map("CARRIER")
+}
+
+model Customer {
+  customerId     String   @id @map("customer_id")
+  email          String   @unique
+  phoneNumber    String   @unique @map("phone_number")
+  fullName       String?  @map("full_name")
+  originLocation String?  @map("origin_location")
+  customerType   String   @map("customer_type")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  transactions BusinessTransaction[]
+
+  @@map("CUSTOMER")
+}
+
+model BatchNft {
+  tokenId              String    @id @map("tokenId")
+  producerId           String    @map("producer_id")
+  productName          String?
+  origin               String?
+  harvestDate          DateTime? @map("harvestDate") @db.Date
+  certification        String?
+  batchNumber          String?   @map("batchNumber")
+  blockchainTxHash     String    @unique @map("blockchain_tx_hash")
+  smartContractAddress String    @map("smart_contract_address")
+  metadataIpfsCid      String    @map("metadata_ipfs_cid")
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  producer      Producer              @relation(fields: [producerId], references: [producerId], onDelete: NoAction, onUpdate: NoAction)
+  qrCode        QrCode?
+  transactions  BusinessTransaction[]
+  shipmentLogs  ShipmentLog[]
+  issueReports  IssueReport[]
+  queryHistory  QueryHistory[]
+  reputationLog ReputationLog[]
+
+  @@index([tokenId], map: "idx_batch_tokenId")
+  @@map("BATCH_NFT")
+}
+
+model QrCode {
+  qrId        String   @id @map("qr_id")
+  tokenId     String   @unique @map("tokenId")
+  url         String
+  generatedAt DateTime @default(now()) @map("generated_at")
+
+  batch BatchNft @relation(fields: [tokenId], references: [tokenId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("QR_CODE")
+}
+
+model BusinessTransaction {
+  txId                  String    @id @map("tx_id")
+  tokenId               String    @map("tokenId")
+  carrierId             String    @map("carrier_id")
+  customerId            String    @map("customer_id")
+  escrowStatus          String    @map("escrow_status")
+  escrowAmount          Decimal   @map("escrow_amount") @db.Decimal(38, 0)
+  paymentReleasedAt     DateTime? @map("payment_released_at")
+  paymentReleasedReason String?   @map("payment_released_reason")
+  blockchainTxHash      String    @unique @map("blockchain_tx_hash")
+  smartContractAddress  String    @map("smart_contract_address")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  batch         BatchNft       @relation(fields: [tokenId], references: [tokenId], onDelete: NoAction, onUpdate: NoAction)
+  carrier       Carrier        @relation(fields: [carrierId], references: [carrierId], onDelete: NoAction, onUpdate: NoAction)
+  customer      Customer       @relation(fields: [customerId], references: [customerId], onDelete: NoAction, onUpdate: NoAction)
+  billingDetail BillingDetail?
+  shipmentLogs  ShipmentLog[]
+
+  @@index([tokenId], map: "idx_tx_tokenId")
+  @@map("TRANSACTION")
+}
+
+model BillingDetail {
+  billingId     String  @id @map("billing_id")
+  txId          String  @unique @map("tx_id")
+  flatFee       Decimal @default(0) @map("flat_fee") @db.Decimal(38, 0)
+  logisticsFee  Decimal @default(0) @map("logistics_fee") @db.Decimal(38, 0)
+  taxAmount     Decimal @default(0) @map("tax_amount") @db.Decimal(38, 0)
+  totalAmount   Decimal @default(0) @map("total_amount") @db.Decimal(38, 0)
+  invoiceUrl    String? @map("invoice_url")
+  refundAmount  Decimal @default(0) @map("refund_amount") @db.Decimal(38, 0)
+  refundReason  String? @map("refund_reason")
+  billingStatus String  @map("billing_status")
+
+  transaction BusinessTransaction @relation(fields: [txId], references: [txId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("BILLING_DETAIL")
+}
+
+model ShipmentLog {
+  logId              String   @id @map("log_id")
+  txId               String   @map("tx_id")
+  tokenId            String   @map("tokenId")
+  temperatureLogs    String?  @map("temperature_logs")
+  humidityLogs       String?  @map("humidity_logs")
+  gpsTrucking        String?  @map("gps_trucking")
+  doorOpenClose      String?  @map("door_open_close")
+  logisticsDocuments String?  @map("logistics_documents")
+  loggedAt           DateTime @default(now()) @map("logged_at")
+
+  transaction BusinessTransaction @relation(fields: [txId], references: [txId], onDelete: NoAction, onUpdate: NoAction)
+  batch       BatchNft            @relation(fields: [tokenId], references: [tokenId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tokenId], map: "idx_shiplog_tokenId")
+  @@map("SHIPMENT_LOG")
+}
+
+model IssueReport {
+  issueId             String   @id @map("issue_id")
+  tokenId             String   @map("tokenId")
+  reporterType        String   @map("reporter_type")
+  reporterId          String   @map("reporter_id")
+  issueType           String   @map("issue_type")
+  issueDescription    String?  @map("issue_description")
+  evidenceIpfsCid     String?  @map("evidence_ipfs_cid")
+  inspectionReportUrl String?  @map("inspection_report_url")
+  issueStatus         String   @map("issue_status")
+  blockchainTxHash    String?  @map("blockchain_tx_hash")
+  reportedAt          DateTime @default(now()) @map("reported_at")
+
+  batch      BatchNft    @relation(fields: [tokenId], references: [tokenId], onDelete: NoAction, onUpdate: NoAction)
+  resolution Resolution?
+
+  @@index([tokenId], map: "idx_issue_tokenId")
+  @@map("ISSUE_REPORT")
+}
+
+model Resolution {
+  resolutionId          String    @id @map("resolution_id")
+  issueId               String    @unique @map("issue_id")
+  resolutionType        String    @map("resolution_type")
+  resolvedBy            String    @map("resolved_by")
+  resolutionDescription String?   @map("resolution_description")
+  settlementDocUrl      String?   @map("settlement_doc_url")
+  financialImpact       String    @map("financial_impact")
+  refundAmount          Decimal   @default(0) @map("refund_amount") @db.Decimal(38, 0)
+  recallBatch           Boolean   @default(false) @map("recall_batch")
+  blockchainTxHash      String?   @map("blockchain_tx_hash")
+  resolvedAt            DateTime? @map("resolved_at")
+
+  issue          IssueReport     @relation(fields: [issueId], references: [issueId], onDelete: NoAction, onUpdate: NoAction)
+  reputationLogs ReputationLog[]
+
+  @@map("RESOLUTION")
+}
+
+model QueryHistory {
+  queryId              String   @id @map("query_id")
+  tokenId              String   @map("tokenId")
+  queriedByType        String   @map("queried_by_type")
+  queriedById          String?  @map("queried_by_id")
+  metadataHashVerified String   @map("metadata_hash_verified")
+  integrityCheck       Boolean  @default(false) @map("integrity_check")
+  queriedAt            DateTime @default(now()) @map("queried_at")
+
+  batch BatchNft @relation(fields: [tokenId], references: [tokenId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tokenId], map: "idx_query_tokenId")
+  @@map("QUERY_HISTORY")
+}
+
+model ReputationLog {
+  logId        String   @id @map("log_id")
+  subjectType  String   @map("subject_type")
+  subjectId    String   @map("subject_id")
+  tokenId      String   @map("tokenId")
+  resolutionId String   @map("resolution_id")
+  scoreBefore  Float    @map("score_before")
+  scoreAfter   Float    @map("score_after")
+  scoreDelta   Float    @map("score_delta")
+  reason       String?
+  loggedAt     DateTime @default(now()) @map("logged_at")
+
+  batch      BatchNft   @relation(fields: [tokenId], references: [tokenId], onDelete: NoAction, onUpdate: NoAction)
+  resolution Resolution @relation(fields: [resolutionId], references: [resolutionId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([subjectId], map: "idx_rep_subject")
+  @@index([tokenId], map: "idx_rep_tokenId")
+  @@map("REPUTATION_LOG")
 }

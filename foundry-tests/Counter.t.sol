@@ -111,7 +111,7 @@ contract CounterTest is Test {
         _anchorAndConfirm(issueId);
         vm.prank(stranger);
         vm.expectRevert();
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     function test_AccessControl_TransferCustody_Unauthorized() public {
@@ -161,7 +161,7 @@ contract CounterTest is Test {
         uint256 issueId = bt.reportIssue(batchId, ISSUE_HASH, ISSUE_TYPE);
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.UnderReview));
         // Issue struct bây giờ có 13 fields (thêm stakeholderConfirmed)
-        (,,, string memory iType, address rep,,,,,,,,) = bt.issues(issueId);
+        (,,, string memory iType, address rep,,,,,,,,,) = bt.issues(issueId);
         assertEq(rep, retailer);
         assertEq(iType, ISSUE_TYPE);
     }
@@ -171,7 +171,7 @@ contract CounterTest is Test {
         vm.prank(distributor);
         uint256 issueId = bt.reportIssue(batchId, ISSUE_HASH, ISSUE_TYPE);
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.UnderReview));
-        (,,, string memory iType, address rep,,,,,,,,) = bt.issues(issueId);
+        (,,, string memory iType, address rep,,,,,,,,,) = bt.issues(issueId);
         assertEq(rep, distributor);
         assertEq(iType, ISSUE_TYPE);
     }
@@ -184,7 +184,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(retailer);
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
-        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,,) = bt.issues(issueId);
         assertEq(evHash, EVIDENCE_HASH);
         assertEq(uint8(status), uint8(Counter.IssueStatus.UnderReview));
     }
@@ -193,7 +193,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(distributor);
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
-        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,,) = bt.issues(issueId);
         assertEq(evHash, EVIDENCE_HASH);
         assertEq(uint8(status), uint8(Counter.IssueStatus.UnderReview));
     }
@@ -443,6 +443,7 @@ contract CounterTest is Test {
             bytes32 evHash,
             bytes32 setHash,
             Counter.ResolutionType resType,
+            uint256 refundAmount,
             address resolvedBy,
             uint256 resolvedAt,
             bool stakeholderConfirmed
@@ -458,6 +459,7 @@ contract CounterTest is Test {
         assertEq(evHash, bytes32(0));
         assertEq(setHash, bytes32(0));
         assertEq(uint8(resType), uint8(Counter.ResolutionType.None));
+        assertEq(refundAmount, 0);
         assertEq(resolvedBy, address(0));
         assertEq(resolvedAt, 0);
         assertFalse(stakeholderConfirmed);
@@ -529,7 +531,7 @@ contract CounterTest is Test {
         // resolve i0 để mở batch
         _anchorAndConfirm(i0);
         vm.prank(resolver);
-        bt.resolveIssue(i0, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(i0, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
 
         vm.prank(producer);
         uint256 batchId2 = bt.createBatch(keccak256("meta2"), "CID2");
@@ -549,7 +551,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(inspector);
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
-        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus status, bytes32 evHash,,,,,,) = bt.issues(issueId);
         assertEq(evHash, EVIDENCE_HASH);
         assertEq(uint8(status), uint8(Counter.IssueStatus.UnderReview));
     }
@@ -571,7 +573,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
         vm.prank(inspector);
         vm.expectRevert("anchorEvidence: issue not open");
         bt.anchorEvidence(issueId, keccak256("extra-evidence"));
@@ -655,7 +657,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
         vm.prank(producer);
         vm.expectRevert("confirmResolution: issue already settled");
         bt.confirmResolution(issueId);
@@ -679,18 +681,20 @@ contract CounterTest is Test {
         (uint256 batchId, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
         (
             ,,,,,,
             Counter.IssueStatus iStatus,,
             bytes32 setHash,
             Counter.ResolutionType resType,
+            uint256 refundAmount,
             address resolvedBy,
             uint256 resolvedAt,
         ) = bt.issues(issueId);
         assertEq(uint8(iStatus), uint8(Counter.IssueStatus.Resolved));
         assertEq(setHash, SETTLEMENT_HASH);
         assertEq(uint8(resType), uint8(Counter.ResolutionType.Cleared));
+        assertEq(refundAmount, 0);
         assertEq(resolvedBy, resolver);
         assertGt(resolvedAt, 0);
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Cleared));
@@ -700,8 +704,8 @@ contract CounterTest is Test {
         (uint256 batchId, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Recalled);
-        (,,,,,, Counter.IssueStatus iStatus,,,,,,) = bt.issues(issueId);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Recalled, 0);
+        (,,,,,, Counter.IssueStatus iStatus,,,,,,,) = bt.issues(issueId);
         assertEq(uint8(iStatus), uint8(Counter.IssueStatus.Recalled));
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Recalled));
     }
@@ -710,8 +714,8 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Refund);
-        (,,,,,,,,, Counter.ResolutionType resType,,,) = bt.issues(issueId);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Refund, 1 ether);
+        (,,,,,,,,, Counter.ResolutionType resType,,,,) = bt.issues(issueId);
         assertEq(uint8(resType), uint8(Counter.ResolutionType.Refund));
     }
 
@@ -719,8 +723,8 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Replaced);
-        (,,,,,,,,, Counter.ResolutionType resType,,,) = bt.issues(issueId);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Replaced, 0);
+        (,,,,,,,,, Counter.ResolutionType resType,,,,) = bt.issues(issueId);
         assertEq(uint8(resType), uint8(Counter.ResolutionType.Replaced));
     }
 
@@ -729,25 +733,25 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.RefundPartial);
-        (,,,,,,,,, Counter.ResolutionType resType,,,) = bt.issues(issueId);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.RefundPartial, 1 ether);
+        (,,,,,,,,, Counter.ResolutionType resType,,,,) = bt.issues(issueId);
         assertEq(uint8(resType), uint8(Counter.ResolutionType.RefundPartial));
     }
 
     function test_ResolveIssue_NotFound() public {
         vm.prank(resolver);
         vm.expectRevert("resolveIssue: issue not found");
-        bt.resolveIssue(999, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(999, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     function test_ResolveIssue_AlreadySettled() public {
         (, uint256 issueId) = _createBatchAndIssue();
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
         vm.prank(resolver);
         vm.expectRevert("resolveIssue: already settled");
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     function test_ResolveIssue_ZeroSettlementHash() public {
@@ -755,7 +759,7 @@ contract CounterTest is Test {
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
         vm.expectRevert("resolveIssue: settlementHash required");
-        bt.resolveIssue(issueId, bytes32(0), Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, bytes32(0), Counter.ResolutionType.Cleared, 0);
     }
 
     function test_ResolveIssue_NoneResolutionReverts() public {
@@ -763,7 +767,7 @@ contract CounterTest is Test {
         _anchorAndConfirm(issueId);
         vm.prank(resolver);
         vm.expectRevert("resolveIssue: resolution required");
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.None);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.None, 0);
     }
 
     // [ADD-2] Phải anchor evidence trước khi resolve
@@ -771,7 +775,7 @@ contract CounterTest is Test {
         (, uint256 issueId) = _createBatchAndIssue();
         vm.prank(resolver);
         vm.expectRevert("resolveIssue: evidence must be anchored before resolving");
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     // [ADD-3] Phải có stakeholderConfirmed trước khi resolve
@@ -782,7 +786,7 @@ contract CounterTest is Test {
         bt.anchorEvidence(issueId, EVIDENCE_HASH);
         vm.prank(resolver);
         vm.expectRevert("resolveIssue: stakeholder confirmation required before resolving");
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     // [FIX-4] Batch phải đang UnderReview
@@ -798,7 +802,7 @@ contract CounterTest is Test {
         vm.prank(producer);
         bt.confirmResolution(issueId1);
         vm.prank(resolver);
-        bt.resolveIssue(issueId1, SETTLEMENT_HASH, Counter.ResolutionType.Recalled);
+        bt.resolveIssue(issueId1, SETTLEMENT_HASH, Counter.ResolutionType.Recalled, 0);
         // batch giờ là Recalled, không thể mở issue mới vì reportIssue chặn Recalled
         // Test FIX-4 đã được cover qua các test flow đúng — batch luôn UnderReview khi có issue open
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Recalled));
@@ -816,7 +820,7 @@ contract CounterTest is Test {
         // Resolve issue 1 → Cleared (openIssueCount == 0) → batch Cleared
         _anchorAndConfirm(issueId1);
         vm.prank(resolver);
-        bt.resolveIssue(issueId1, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId1, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
         assertEq(bt.getOpenIssueCount(batchId), 0);
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Cleared));
 
@@ -832,7 +836,7 @@ contract CounterTest is Test {
         vm.prank(producer);
         bt.confirmResolution(issueId2);
         vm.prank(resolver);
-        bt.resolveIssue(issueId2, keccak256("settlement2"), Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId2, keccak256("settlement2"), Counter.ResolutionType.Cleared, 0);
         assertEq(bt.getOpenIssueCount(batchId), 0);
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Cleared));
     }
@@ -847,11 +851,12 @@ contract CounterTest is Test {
             Counter.IssueStatus.Resolved,
             Counter.ResolutionType.Cleared,
             SETTLEMENT_HASH,
+            0,
             resolver,
             block.timestamp
         );
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     function test_ResolveIssue_EmitsBatchStatusChanged() public {
@@ -862,7 +867,102 @@ contract CounterTest is Test {
             batchId, Counter.BatchStatus.UnderReview, Counter.BatchStatus.Cleared, resolver, block.timestamp
         );
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
+    }
+
+    // ─────────────────────────────────────────────
+    //  ESCROW / PAYMENT
+    // ─────────────────────────────────────────────
+
+    function test_Escrow_LockPayment() public {
+        uint256 batchId = _createBatch();
+        vm.deal(retailer, 10 ether);
+
+        vm.expectEmit(true, true, true, true);
+        emit Counter.PaymentLocked(batchId, retailer, producer, 10 ether, 0.1 ether, block.timestamp);
+        vm.prank(retailer);
+        bt.lockPayment{value: 10 ether}(batchId, producer, 0.1 ether);
+
+        (
+            uint256 storedBatchId,
+            address payer,
+            address payee,
+            uint256 amount,
+            uint256 flatFee,,,
+            Counter.EscrowStatus status,
+            bool exists
+        ) = bt.escrows(batchId);
+
+        assertEq(storedBatchId, batchId);
+        assertEq(payer, retailer);
+        assertEq(payee, producer);
+        assertEq(amount, 10 ether);
+        assertEq(flatFee, 0.1 ether);
+        assertEq(uint8(status), uint8(Counter.EscrowStatus.Locked));
+        assertTrue(exists);
+    }
+
+    function test_Escrow_ReleasePaymentAfterDelivered() public {
+        uint256 batchId = _createBatch();
+        vm.deal(retailer, 10 ether);
+
+        vm.prank(retailer);
+        bt.lockPayment{value: 10 ether}(batchId, producer, 0.1 ether);
+        _transferToRetailer(batchId);
+
+        vm.expectEmit(true, true, false, true);
+        emit Counter.PaymentReleased(batchId, producer, 9.9 ether, 0.1 ether, block.timestamp);
+        vm.prank(retailer);
+        bt.releasePayment(batchId);
+
+        (,,,,,,, Counter.EscrowStatus status,) = bt.escrows(batchId);
+        assertEq(uint8(status), uint8(Counter.EscrowStatus.Released));
+    }
+
+    function test_Escrow_RefundPaymentOnResolution() public {
+        uint256 batchId = _createBatch();
+        vm.deal(retailer, 10 ether);
+
+        vm.prank(retailer);
+        bt.lockPayment{value: 10 ether}(batchId, producer, 0);
+
+        vm.prank(inspector);
+        uint256 issueId = bt.reportIssue(batchId, ISSUE_HASH, ISSUE_TYPE);
+        _anchorAndConfirm(issueId);
+
+        vm.expectEmit(true, true, false, true);
+        emit Counter.PaymentRefunded(batchId, retailer, 10 ether, Counter.ResolutionType.Refund, block.timestamp);
+        vm.prank(resolver);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Refund, 10 ether);
+
+        (,,,,,,,,, Counter.ResolutionType resType, uint256 refundAmount,,,) = bt.issues(issueId);
+        assertEq(uint8(resType), uint8(Counter.ResolutionType.Refund));
+        assertEq(refundAmount, 10 ether);
+
+        (,,,,,,, Counter.EscrowStatus status,) = bt.escrows(batchId);
+        assertEq(uint8(status), uint8(Counter.EscrowStatus.Refunded));
+    }
+
+    function test_Escrow_PartialRefundPaymentOnResolution() public {
+        uint256 batchId = _createBatch();
+        vm.deal(retailer, 10 ether);
+
+        vm.prank(retailer);
+        bt.lockPayment{value: 10 ether}(batchId, producer, 0);
+
+        vm.prank(inspector);
+        uint256 issueId = bt.reportIssue(batchId, ISSUE_HASH, ISSUE_TYPE);
+        _anchorAndConfirm(issueId);
+
+        vm.prank(resolver);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.RefundPartial, 4 ether);
+
+        (,,,,,,,,, Counter.ResolutionType resType, uint256 refundAmount,,,) = bt.issues(issueId);
+        assertEq(uint8(resType), uint8(Counter.ResolutionType.RefundPartial));
+        assertEq(refundAmount, 4 ether);
+
+        (,,,,,,, Counter.EscrowStatus status,) = bt.escrows(batchId);
+        assertEq(uint8(status), uint8(Counter.EscrowStatus.PartiallyRefunded));
     }
 
     // ─────────────────────────────────────────────
@@ -908,7 +1008,7 @@ contract CounterTest is Test {
         bt.pause();
         vm.prank(resolver);
         vm.expectRevert();
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
     }
 
     // ─────────────────────────────────────────────
@@ -955,7 +1055,7 @@ contract CounterTest is Test {
 
         // 8. Resolver chốt Cleared → Cleared  [FIX-5]
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Cleared, 0);
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Cleared));
         assertEq(bt.getOpenIssueCount(batchId), 0);
     }
@@ -979,10 +1079,10 @@ contract CounterTest is Test {
 
         // 5. Resolver chốt Recalled
         vm.prank(resolver);
-        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Recalled);
+        bt.resolveIssue(issueId, SETTLEMENT_HASH, Counter.ResolutionType.Recalled, 0);
 
         assertEq(uint8(bt.getBatchStatus(batchId)), uint8(Counter.BatchStatus.Recalled));
-        (,,,,,, Counter.IssueStatus iStatus,,,,,,) = bt.issues(issueId);
+        (,,,,,, Counter.IssueStatus iStatus,,,,,,,) = bt.issues(issueId);
         assertEq(uint8(iStatus), uint8(Counter.IssueStatus.Recalled));
         assertEq(bt.getOpenIssueCount(batchId), 0);
     }

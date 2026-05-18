@@ -54,6 +54,10 @@ describe("Counter", async function () {
     Open: 0, UnderReview: 1, Resolved: 2, Recalled: 3,
   } as const;
 
+  const EscrowStatus = {
+    None: 0, Locked: 1, Released: 2, Refunded: 3, PartiallyRefunded: 4,
+  } as const;
+
   // ─────────────────────────────────────────────
   //  Helpers
   // ─────────────────────────────────────────────
@@ -438,7 +442,7 @@ describe("Counter", async function () {
     const { issueId } = await createBatchAndIssue(counter);
     await anchorAndConfirm(counter, issueId);
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
       { account: resolverClient.account },
     );
     await assert.rejects(
@@ -536,7 +540,7 @@ describe("Counter", async function () {
     const fromBlock = await publicClient.getBlockNumber();
 
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
       { account: resolverClient.account },
     );
 
@@ -547,6 +551,7 @@ describe("Counter", async function () {
     assert.equal(events.length, 1);
     assert.equal(events[0].args.settlementHash, SETTLEMENT_HASH);
     assert.equal(Number(events[0].args.resolutionType), ResolutionType.Cleared);
+    assert.equal(events[0].args.refundAmount, 0n);
     assert.equal(events[0].args.resolvedBy?.toLowerCase(), resolverAddress.toLowerCase());
 
     const batch = await counter.read.batches([batchId]);
@@ -562,7 +567,7 @@ describe("Counter", async function () {
     await anchorAndConfirm(counter, issueId);
 
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Recalled],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Recalled, 0n],
       { account: resolverClient.account },
     );
 
@@ -579,12 +584,13 @@ describe("Counter", async function () {
     await anchorAndConfirm(counter, issueId);
 
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Refund],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Refund, 1n],
       { account: resolverClient.account },
     );
 
     const issue = await counter.read.issues([issueId]);
     assert.equal(Number(issue[9]), ResolutionType.Refund);
+    assert.equal(issue[10], 1n);
   });
 
   // [ADD] RefundPartial mới
@@ -594,12 +600,13 @@ describe("Counter", async function () {
     await anchorAndConfirm(counter, issueId);
 
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.RefundPartial],
+      [issueId, SETTLEMENT_HASH, ResolutionType.RefundPartial, 1n],
       { account: resolverClient.account },
     );
 
     const issue = await counter.read.issues([issueId]);
     assert.equal(Number(issue[9]), ResolutionType.RefundPartial);
+    assert.equal(issue[10], 1n);
   });
 
   // [ADD-2] Phải anchor evidence trước khi resolve
@@ -608,7 +615,7 @@ describe("Counter", async function () {
     const { issueId } = await createBatchAndIssue(counter);
     await assert.rejects(
       counter.write.resolveIssue(
-        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
         { account: resolverClient.account },
       ),
     );
@@ -621,7 +628,7 @@ describe("Counter", async function () {
     await counter.write.anchorEvidence([issueId, EVIDENCE_HASH], { account: inspectorClient.account });
     await assert.rejects(
       counter.write.resolveIssue(
-        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
         { account: resolverClient.account },
       ),
     );
@@ -633,7 +640,7 @@ describe("Counter", async function () {
     await anchorAndConfirm(counter, issueId);
     await assert.rejects(
       counter.write.resolveIssue(
-        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
         { account: strangerClient.account },
       ),
     );
@@ -644,15 +651,129 @@ describe("Counter", async function () {
     const { issueId } = await createBatchAndIssue(counter);
     await anchorAndConfirm(counter, issueId);
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
       { account: resolverClient.account },
     );
     await assert.rejects(
       counter.write.resolveIssue(
-        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+        [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
         { account: resolverClient.account },
       ),
     );
+  });
+
+  // ─────────────────────────────────────────────
+  //  ESCROW / PAYMENT
+  // ─────────────────────────────────────────────
+
+  it("Should lock payment for a batch", async function () {
+    const counter = await deployAndSetupRoles();
+    const batchId = await createBatch(counter);
+    const fromBlock = await publicClient.getBlockNumber();
+
+    await counter.write.lockPayment(
+      [batchId, producerAddress, 10n],
+      { account: retailerClient.account, value: 1000n },
+    );
+
+    const events = await publicClient.getContractEvents({
+      address: counter.address, abi: counter.abi, eventName: "PaymentLocked", fromBlock, strict: true,
+    });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].args.batchId, batchId);
+    assert.equal(events[0].args.payer?.toLowerCase(), retailerAddress.toLowerCase());
+    assert.equal(events[0].args.payee?.toLowerCase(), producerAddress.toLowerCase());
+    assert.equal(events[0].args.amount, 1000n);
+    assert.equal(events[0].args.flatFee, 10n);
+
+    const escrow = await counter.read.escrows([batchId]);
+    assert.equal(escrow[0], batchId);
+    assert.equal(escrow[1].toLowerCase(), retailerAddress.toLowerCase());
+    assert.equal(escrow[2].toLowerCase(), producerAddress.toLowerCase());
+    assert.equal(escrow[3], 1000n);
+    assert.equal(escrow[4], 10n);
+    assert.equal(Number(escrow[7]), EscrowStatus.Locked);
+    assert.equal(escrow[8], true);
+  });
+
+  it("Should release payment after delivery", async function () {
+    const counter = await deployAndSetupRoles();
+    const batchId = await createBatch(counter);
+
+    await counter.write.lockPayment(
+      [batchId, producerAddress, 10n],
+      { account: retailerClient.account, value: 1000n },
+    );
+    await transferToRetailer(counter, batchId);
+
+    const fromBlock = await publicClient.getBlockNumber();
+    await counter.write.releasePayment([batchId], { account: retailerClient.account });
+
+    const events = await publicClient.getContractEvents({
+      address: counter.address, abi: counter.abi, eventName: "PaymentReleased", fromBlock, strict: true,
+    });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].args.batchId, batchId);
+    assert.equal(events[0].args.payee?.toLowerCase(), producerAddress.toLowerCase());
+    assert.equal(events[0].args.amount, 990n);
+    assert.equal(events[0].args.flatFee, 10n);
+
+    const escrow = await counter.read.escrows([batchId]);
+    assert.equal(Number(escrow[7]), EscrowStatus.Released);
+  });
+
+  it("Should refund locked payment on Refund resolution", async function () {
+    const counter = await deployAndSetupRoles();
+    const { batchId, issueId } = await createBatchAndIssue(counter);
+
+    await counter.write.lockPayment(
+      [batchId, producerAddress, 0n],
+      { account: retailerClient.account, value: 1000n },
+    );
+    await anchorAndConfirm(counter, issueId);
+
+    const fromBlock = await publicClient.getBlockNumber();
+    await counter.write.resolveIssue(
+      [issueId, SETTLEMENT_HASH, ResolutionType.Refund, 1000n],
+      { account: resolverClient.account },
+    );
+
+    const events = await publicClient.getContractEvents({
+      address: counter.address, abi: counter.abi, eventName: "PaymentRefunded", fromBlock, strict: true,
+    });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].args.batchId, batchId);
+    assert.equal(events[0].args.payer?.toLowerCase(), retailerAddress.toLowerCase());
+    assert.equal(events[0].args.refundAmount, 1000n);
+    assert.equal(Number(events[0].args.resolutionType), ResolutionType.Refund);
+
+    const issue = await counter.read.issues([issueId]);
+    assert.equal(issue[10], 1000n);
+
+    const escrow = await counter.read.escrows([batchId]);
+    assert.equal(Number(escrow[7]), EscrowStatus.Refunded);
+  });
+
+  it("Should partially refund locked payment on RefundPartial resolution", async function () {
+    const counter = await deployAndSetupRoles();
+    const { batchId, issueId } = await createBatchAndIssue(counter);
+
+    await counter.write.lockPayment(
+      [batchId, producerAddress, 0n],
+      { account: retailerClient.account, value: 1000n },
+    );
+    await anchorAndConfirm(counter, issueId);
+
+    await counter.write.resolveIssue(
+      [issueId, SETTLEMENT_HASH, ResolutionType.RefundPartial, 400n],
+      { account: resolverClient.account },
+    );
+
+    const issue = await counter.read.issues([issueId]);
+    assert.equal(issue[10], 400n);
+
+    const escrow = await counter.read.escrows([batchId]);
+    assert.equal(Number(escrow[7]), EscrowStatus.PartiallyRefunded);
   });
 
   // ─────────────────────────────────────────────
@@ -747,7 +868,7 @@ describe("Counter", async function () {
 
     // 8. Resolver chốt Cleared  [FIX-5]
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Cleared, 0n],
       { account: resolverClient.account },
     );
     batch = await counter.read.batches([batchId]);
@@ -769,7 +890,7 @@ describe("Counter", async function () {
     await anchorAndConfirm(counter, issueId);
 
     await counter.write.resolveIssue(
-      [issueId, SETTLEMENT_HASH, ResolutionType.Recalled],
+      [issueId, SETTLEMENT_HASH, ResolutionType.Recalled, 0n],
       { account: resolverClient.account },
     );
 
