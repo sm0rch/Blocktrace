@@ -1,0 +1,348 @@
+// ============================================================
+// BlockTrace — Prisma Schema (PostgreSQL)
+// Dựa trên ERD Off-chain v2
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────────
+
+enum CustomerType {
+  Individual
+  Enterprise
+}
+
+enum EscrowStatus {
+  Locked
+  Released
+  Refunded
+  Disputed
+}
+
+enum BillingStatus {
+  Pending
+  Paid
+  Refunded
+  Disputed
+}
+
+enum IssueType {
+  Damaged
+  Spoiled
+  Missing
+  Delayed
+  Other
+}
+
+enum IssueStatus {
+  Open
+  UnderReview
+  Resolved
+  Rejected
+}
+
+enum ReporterType {
+  Producer
+  Carrier
+  Customer
+}
+
+enum ResolutionType {
+  Refund
+  Replace
+  Recall
+  Rejected
+}
+
+enum FinancialImpact {
+  Refund
+  Deduct_Carrier
+  No_Action
+}
+
+enum SubjectType {
+  Producer
+  Carrier
+}
+
+enum QueriedByType {
+  Producer
+  Carrier
+  Customer
+  Anonymous
+}
+
+
+// ─── NHÓM 1 — ĐỊNH DANH VAI TRÒ ─────────────────────────────
+
+model Producer {
+  producer_id        String   @id @default(uuid())
+  email              String   @unique
+  phone_number       String   @unique
+  origin_location    String?
+  full_name          String
+  company_name       String   @unique
+  business_license   String   @unique
+  tax_code           String   @unique
+  certification_list String?  // Danh sách chứng chỉ: GlobalGAP, VietGAP...
+  reputation_score   Float    @default(100.0)
+  created_at         DateTime @default(now())
+
+  // Relations
+  batches            BatchNft[]
+  reputation_logs    ReputationLog[]
+
+  @@map("producers")
+}
+
+model Carrier {
+  carrier_id       String   @id @default(uuid())
+  email            String   @unique
+  phone_number     String   @unique
+  company_name     String   @unique
+  business_license String   @unique
+  tax_code         String   @unique
+  vehicle_list     String?  // Danh sách phương tiện: biển số, loại xe, tải trọng
+  cold_chain_cert  String?  // Chứng chỉ vận chuyển lạnh
+  reputation_score Float    @default(100.0)
+  created_at       DateTime @default(now())
+
+  // Relations
+  transactions     Transaction[]
+  reputation_logs  ReputationLog[]
+
+  @@map("carriers")
+}
+
+model Customer {
+  customer_id     String       @id @default(uuid())
+  email           String       @unique
+  phone_number    String       @unique
+  full_name       String
+  origin_location String?
+  customer_type   CustomerType @default(Individual)
+  created_at      DateTime     @default(now())
+
+  // Relations
+  transactions    Transaction[]
+
+  @@map("customers")
+}
+
+
+// ─── NHÓM 2 — LÔ HÀNG (BATCH) ───────────────────────────────
+
+model BatchNft {
+  tokenId                String   @id
+  producer_id            String
+  productName            String
+  origin                 String
+  harvestDate            DateTime @db.Date
+  certification          String?
+  batchNumber            String
+
+  // Mã neo On-chain
+  blockchain_tx_hash     String   @unique
+  smart_contract_address String
+  metadata_ipfs_cid      String
+
+  created_at             DateTime @default(now())
+
+  // Relations
+  producer               Producer       @relation(fields: [producer_id], references: [producer_id])
+  qr_code                QrCode?
+  transactions           Transaction[]
+  shipment_logs          ShipmentLog[]
+  issue_reports          IssueReport[]
+  query_histories        QueryHistory[]
+  reputation_logs        ReputationLog[]
+
+  @@index([tokenId], name: "idx_batch_tokenId")
+  @@map("batch_nfts")
+}
+
+model QrCode {
+  qr_id        String   @id @default(uuid())
+  tokenId      String   @unique   // 1-1 với BatchNft
+  url          String
+  generated_at DateTime @default(now())
+
+  // Relations
+  batch        BatchNft @relation(fields: [tokenId], references: [tokenId])
+
+  @@map("qr_codes")
+}
+
+
+// ─── NHÓM 3 — GIAO DỊCH & TÀI CHÍNH ─────────────────────────
+
+model Transaction {
+  tx_id                   String        @id @default(uuid())
+  tokenId                 String
+  carrier_id              String
+  customer_id             String
+
+  // Mirror Escrow Vault On-chain
+  escrow_status           EscrowStatus  @default(Locked)
+  escrow_amount           Float
+  payment_released_at     DateTime?
+  payment_released_reason String?
+
+  // Mã neo On-chain
+  blockchain_tx_hash      String        @unique
+  smart_contract_address  String
+
+  created_at              DateTime      @default(now())
+
+  // Relations
+  batch                   BatchNft      @relation(fields: [tokenId], references: [tokenId])
+  carrier                 Carrier       @relation(fields: [carrier_id], references: [carrier_id])
+  customer                Customer      @relation(fields: [customer_id], references: [customer_id])
+  billing_detail          BillingDetail?
+  shipment_logs           ShipmentLog[]
+
+  @@index([tokenId], name: "idx_tx_tokenId")
+  @@map("transactions")
+}
+
+model BillingDetail {
+  billing_id     String        @id @default(uuid())
+  tx_id          String        @unique   // 1-1 với Transaction
+  flat_fee       Float         @default(0)
+  logistics_fee  Float         @default(0)
+  tax_amount     Float         @default(0)
+  total_amount   Float
+  invoice_url    String?       // Link hóa đơn PDF trên IPFS/S3
+  refund_amount  Float         @default(0)
+  refund_reason  String?
+  billing_status BillingStatus @default(Pending)
+
+  // Relations
+  transaction    Transaction   @relation(fields: [tx_id], references: [tx_id])
+
+  @@map("billing_details")
+}
+
+model ShipmentLog {
+  log_id              String   @id @default(uuid())
+  tx_id               String
+  tokenId             String
+
+  temperature_logs    String?  // Chuỗi JSON log nhiệt độ
+  humidity_logs       String?  // Chuỗi JSON log độ ẩm
+  gps_trucking        String?  // Chuỗi tọa độ GPS theo thời gian
+  door_open_close     String?  // Log mở/đóng cửa container
+  logistics_documents String?  // Vận đơn, chứng từ hải quan
+
+  logged_at           DateTime @default(now())
+
+  // Relations
+  transaction         Transaction @relation(fields: [tx_id], references: [tx_id])
+  batch               BatchNft    @relation(fields: [tokenId], references: [tokenId])
+
+  @@index([tokenId], name: "idx_shiplog_tokenId")
+  @@map("shipment_logs")
+}
+
+
+// ─── NHÓM 4 — XỬ LÝ SỰ CỐ ───────────────────────────────────
+
+model IssueReport {
+  issue_id              String      @id @default(uuid())
+  tokenId               String
+  reporter_type         ReporterType
+  reporter_id           String      // FK động theo reporter_type
+  issue_type            IssueType
+  issue_description     String?
+  evidence_ipfs_cid     String?     // Danh sách CID ảnh/video trên IPFS
+  inspection_report_url String?     // Báo cáo kiểm định bên thứ ba
+  issue_status          IssueStatus @default(Open)
+
+  // Mã neo On-chain
+  blockchain_tx_hash    String?
+
+  reported_at           DateTime    @default(now())
+
+  // Relations
+  batch                 BatchNft    @relation(fields: [tokenId], references: [tokenId])
+  resolution            Resolution?
+
+  @@index([tokenId], name: "idx_issue_tokenId")
+  @@map("issue_reports")
+}
+
+model Resolution {
+  resolution_id          String          @id @default(uuid())
+  issue_id               String          @unique   // 1-1 với IssueReport
+  resolution_type        ResolutionType
+  resolved_by            String          // ID người/bộ phận xử lý
+  resolution_description String?
+  settlement_doc_url     String?         // Biên bản thỏa thuận PDF trên IPFS
+
+  // Đối soát tài chính
+  financial_impact       FinancialImpact @default(No_Action)
+  refund_amount          Float           @default(0)
+  recall_batch           Boolean         @default(false)
+
+  // Mã neo On-chain
+  blockchain_tx_hash     String?
+
+  resolved_at            DateTime        @default(now())
+
+  // Relations
+  issue                  IssueReport     @relation(fields: [issue_id], references: [issue_id])
+  reputation_logs        ReputationLog[]
+
+  @@map("resolutions")
+}
+
+
+// ─── NHÓM 5 — TRUY VẤN & UY TÍN ─────────────────────────────
+
+model QueryHistory {
+  query_id               String        @id @default(uuid())
+  tokenId                String
+  queried_by_type        QueriedByType @default(Anonymous)
+  queried_by_id          String?       // FK động theo queried_by_type
+  metadata_hash_verified String?       // Hash metadata tại thời điểm truy vấn
+  integrity_check        Boolean       @default(false)
+  queried_at             DateTime      @default(now())
+
+  // Relations
+  batch                  BatchNft      @relation(fields: [tokenId], references: [tokenId])
+
+  @@index([tokenId], name: "idx_query_tokenId")
+  @@map("query_histories")
+}
+
+model ReputationLog {
+  log_id        String      @id @default(uuid())
+  subject_type  SubjectType
+  subject_id    String      // FK động: producer_id hoặc carrier_id
+  tokenId       String
+  resolution_id String
+
+  score_before  Float
+  score_after   Float
+  score_delta   Float       // Dương = tăng, Âm = giảm
+  reason        String?
+
+  logged_at     DateTime    @default(now())
+
+  // Relations
+  batch         BatchNft    @relation(fields: [tokenId], references: [tokenId])
+  resolution    Resolution  @relation(fields: [resolution_id], references: [resolution_id])
+  producer      Producer?   @relation(fields: [subject_id], references: [producer_id])
+  carrier       Carrier?    @relation(fields: [subject_id], references: [carrier_id])
+
+  @@index([subject_id], name: "idx_rep_subject")
+  @@index([tokenId],    name: "idx_rep_tokenId")
+  @@map("reputation_logs")
+}
