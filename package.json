@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "api": "node src/api/server.js",
+    "test": "hardhat test"
   },
   "repository": {
     "type": "git",
@@ -33,7 +34,9 @@
   "dependencies": {
     "@nomicfoundation/ignition-core": "^3.1.5",
     "@openzeppelin/contracts": "^5.6.1",
+    "@prisma/adapter-mssql": "^7.8.0",
     "@prisma/client": "^7.8.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
   }
 }
