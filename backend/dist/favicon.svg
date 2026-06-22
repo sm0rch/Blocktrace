@@ -1,0 +1,20 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="200" height="200" fill="#ffffff" rx="40"/>
+  
+  <!-- Left leaf -->
+  <ellipse cx="70" cy="85" rx="25" ry="45" fill="#0d5e2d" transform="rotate(-30 70 85)" />
+  <circle cx="55" cy="55" r="4" fill="white" />
+  
+  <!-- Center leaf (tallest) -->
+  <ellipse cx="100" cy="50" rx="28" ry="50" fill="#0f7e3a" transform="rotate(0 100 50)" />
+  <circle cx="100" cy="30" r="4" fill="white" />
+  
+  <!-- Right leaf -->
+  <ellipse cx="130" cy="85" rx="25" ry="45" fill="#0d5e2d" transform="rotate(30 130 85)" />
+  <circle cx="145" cy="55" r="4" fill="white" />
+  
+  <!-- Water waves -->
+  <path d="M 50 130 Q 75 120 100 130 T 150 130" stroke="#0f7e3a" stroke-width="3" fill="none" stroke-linecap="round" />
+  <path d="M 60 145 Q 85 135 110 145 T 160 145" stroke="#0d5e2d" stroke-width="2" fill="none" stroke-linecap="round" />
+</svg>
